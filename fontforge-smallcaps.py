@@ -162,6 +162,15 @@ def renameFont_prefix(font, prefix, familyName=None):
 	if font.fondname:
 		font.fondname = replacer2(font.fondname) # should be independent
 
+def substituteGlyphsWithSuffix(font, suffix):
+	cutoff = - len(suffix)
+	for glyph in font.glyphs():
+		if glyph.glyphname.endswith(suffix):
+			glyph_re = getGlyphByName(font, glyph.glyphname[:cutoff])
+			if glyph_re: # TODO: handle cases like in applyFeatureToGlyph
+				glyph.unicode, glyph_re.unicode = glyph_re.unicode, glyph_re.unicode
+	return None
+
 def applyFeatureToGlyph(font, glyph, feature, forceRe=False, copyGlyph=False, overWr=False, copyBehavior=2):
 	# glyph a: (("'case' Case-Sensitive Forms in Latin lookup 20 subtable", 'Substitution', 'A'), ("'smcp' Lowercase to Small Capitals in Latin lookup 18 subtable", 'Substitution', 'a.sc'), ("'ordn' Ordinals in Latin lookup 17 subtable", 'Substitution', 'ordfeminine'))
 	# glyph one: (('Single Substitution lookup 25 subtable', 'Substitution', 'one.denominator'), ("'dnom' Denominators in Latin lookup 16 subtable", 'Substitution', 'one.denominator'), ("'numr' Numerators in Latin lookup 15 subtable", 'Substitution', 'one.numerator'), ("'frac' Diagonal Fractions in Latin lookup 13 subtable", 'Substitution', 'one.numerator'), ("'sinf' Scientific Inferiors in Latin lookup 10 subtable", 'Substitution', 'one.inferior'), ("'sups' Superscript in Latin lookup 9 subtable", 'Substitution', 'onesuperior'), ("'onum' Oldstyle Figures in Latin lookup 7 subtable", 'Substitution', 'one.taboldstyle'), ("'pnum' Proportional Numbers in Latin lookup 6 subtable", 'Substitution', 'one.fitted'))
@@ -327,6 +336,11 @@ def turnonFeature(sina, enableSmallCaps=False, enableStyleAlt=False, setFigure=0
 		else:
 			print('Tabular Numbers feature unavailable.')
 
+def fixFontMisc(font):
+	os2_version = font.os2_version
+	if os2_version < 2: # windows will reject otf cff font with os2 version 1
+		font.os2_version = 3
+
 def makeFontFiles(path):
 	sina = fontforge.open(path)
 	sina.generate(os.path.splitext(path)[0] + '.ttf')
@@ -358,6 +372,7 @@ def doStuff():
 		setFigure = item[3]
 		setNumber = item[4]
 		suffix = item[5]
+		substitutingSuffixes = item[6]
 
 		print('\nProcessing file: %s' % fileName)
 		if not os.path.isfile(fileName):
@@ -389,7 +404,11 @@ def doStuff():
 				outFname = outFname + suffix
 
 		turnonFeature(font, enableSmallCaps, enableStyleAlt, setFigure, setNumber)
+		if substitutingSuffixes:
+			for subSuf in substitutingSuffixes:
+				substituteGlyphsWithSuffix(font, subSuf)
 		renameFont_suffix(font, suffix)
+		fixFontMisc(font)
 
 		if not outputFmt:
 			if ext == '.sfd' or ext == '.otf' or ext == '.ttf':
@@ -412,6 +431,7 @@ def parseParams():
 	setFigure = 0
 	setNumber = 0
 	suffix = 'SC'
+	substitutingSuffixes = []
 
 	i = 1
 	args = sys.argv
@@ -440,15 +460,22 @@ def parseParams():
 				i += 1
 			elif arg == "fmt" and i < argsCount - 1:
 				fmts = args[i+1].split(',')
+				outputFmt = []
 				for fmt in fmts:
 					outputFmt.append(fmt)
+				i += 1
+			elif arg == "sub" and i < argsCount - 1:
+				sufes = args[i+1].split(',')
+				substitutingSuffixes = []
+				for suf in sufes:
+					substitutingSuffixes.append(suf)
 				i += 1
 			elif arg == "sc":
 				enableSmallCaps = True
 			elif arg == 'sa':
 				enableStyleAlt = True
 		else:
-			tmp = (arg, enableSmallCaps, enableStyleAlt, setFigure, setNumber, suffix)
+			tmp = (arg, enableSmallCaps, enableStyleAlt, setFigure, setNumber, suffix, substitutingSuffixes)
 			inputList.append(tmp)
 		i += 1
 
@@ -478,6 +505,7 @@ def printReadMe():
 	print("    -sa                   Enable Stylistic Alternatives feature")
 	print('    -f number             Set figures to [1] Lining, [2] Oldstyle, [0] no change')
 	print('    -n number             Set number to [1] Proportional, [2] Tabular, [0] no change')
+	print('    -sub ".sc,.oldstyle"  Substitute glyphs ending with specified suffixes with those not doing')
 	print('    -o "output dir"       Set where to save outputs')
 	print('    -sf "suffix"          Add suffix to font name')
 	print('    -fmt "otf,ttf,sfd"    Set output formats via file extension')
@@ -489,6 +517,7 @@ def printReadMe():
 	print('    Output files, if already existing, will be overwritten without prompt.')
 	print('    If not specified, output format is the same as input if it\' either otf, ttf, or sfd; otf otherwise.')
 	print('    If not specified, suffix is "SC".')
+	print('    Specific substitution should be used only with fonts with broken substitution tables.')
 	print(' ')
 	print("Examples:")
 	print('    fontforge -script fontforge.py -fmt "otf,ttf" -f 2 -n 0 -sc -sf "SC" "SinaNova-Regular.sfd"')
