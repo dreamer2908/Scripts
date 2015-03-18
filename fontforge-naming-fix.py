@@ -158,6 +158,11 @@ def fixFontWeight(font, styleName):
 	# print('sWeight = %s' % sWeight)
 	# print('nWeight = %d' % nWeight)
 
+def fixFontMisc(font):
+	os2_version = font.os2_version
+	if os2_version < 2: # windows will reject otf cff font with os2 version 1
+		font.os2_version = 3
+
 def printInfo(font):
 	print('font.familyname: ' + font.familyname)
 	#print('font.fondname: ' + font.fondname)
@@ -396,6 +401,7 @@ def doStuff2():
 		font = fontforge.open(fileName)
 		fixFontName(font, familyName, styleName)
 		fixFontWeight(font, styleName)
+		fixFontMisc(font)
 
 		if not outputFmt:
 			ext = os.path.splitext(fname)[1]
