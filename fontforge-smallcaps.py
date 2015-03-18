@@ -42,11 +42,17 @@ def initStuff():
 		python2 = True
 
 def getGlyphByName(font, glyphname):
-	# font[glyphname], which is much faster, might return something else if the glyph with that exact name is not found
 	for glyph in font.glyphs():
 		if (glyph.glyphname == glyphname):
 			return glyph
 	return None
+
+def getGlyphByName2(font, glyphname):
+	# font[glyphname], which is much faster, might return something else if the glyph with that exact name is not found
+	try:
+		return font[glyphname]
+	except:
+		return None
 
 def countGlyphWithName(font, glyphname):
 	count = 0
@@ -171,7 +177,13 @@ def applyFeatureToGlyph(font, glyph, feature, forceRe=False, copyGlyph=False, ov
 		return 2 # feature not available
 
 	if replacement:
+		# OK, sometimes the replacement is not available in the font
 		glyph_re = getGlyphByName(font, replacement[2])
+		if not glyph_re: # retry with font[glyphname]. Maybe a bit risky
+			glyph_re = getGlyphByName2(font, replacement[2])
+		if not glyph_re: # give up
+			return 2
+
 		if beVerbose: print(glyph_re)
 		if glyph.unicode == -1 or glyph_re.unicode == glyph.unicode:
 			return 0 # nothing to do
