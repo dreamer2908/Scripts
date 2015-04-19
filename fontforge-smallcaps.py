@@ -93,24 +93,28 @@ def getFamilyName(font):
 		familyName_old = font.familyname
 	return familyName_old
 
-def replacer(text, familyName_old, familyName_new):
+def replacer(text, familyName_old, familyName_new, dontStripSpace=False):
+	if not dontStripSpace:
+		familyName_new_strip = familyName_new.replace(' ', '')
+	else:
+		familyName_new_strip = familyName_new
 	if familyName_old.replace(' ', '') in text:
-		text = text.replace(familyName_old.replace(' ', ''), familyName_new.replace(' ', ''))
+		text = text.replace(familyName_old.replace(' ', ''), familyName_new_strip)
 	elif familyName_old in text:
 		text = text.replace(familyName_old, familyName_new)
 	elif text.lower().startswith(familyName_old.replace(' ', '').lower()): # fix Palatino nova W1G / PalatinoNovaW1G (different case, font naming bug)
-		text = familyName_new.replace(' ', '') + text[len(familyName_old.replace(' ', '')):]
+		text = familyName_new_strip + text[len(familyName_old.replace(' ', '')):]
 	elif text.lower().startswith(familyName_old.lower()):
 		text = familyName_new + text[len(familyName_old):]
 	return text
 
-def renameFont_suffix(font, suffix, familyName=None):
-	def replacer2(text):
-		return replacer(text, familyName_old, familyName_new)
+def renameFont_suffix(font, suffix, forceInsertSpace=False, familyName=None):
+	def replacer2(text, dontStripSpace=forceInsertSpace):
+		return replacer(text, familyName_old, familyName_new, dontStripSpace)
 
 	familyName_old = getFamilyName(font)
 
-	if ' ' in familyName_old:
+	if ' ' in familyName_old or forceInsertSpace:
 		familyName_new = familyName_old + ' ' + suffix
 	else:
 		familyName_new = familyName_old + suffix
@@ -119,21 +123,23 @@ def renameFont_suffix(font, suffix, familyName=None):
 	for i in range(len(sfnt_names)):
 		sfnt_names[i] = list(sfnt_names[i])
 		tmp = sfnt_names[i][1]
-		if tmp == 'Family' or tmp == 'UniqueID' or tmp == 'Fullname' or tmp == 'PostScriptName' or tmp == 'Preferred Family' or tmp == 'Compatible Full':
+		if tmp == 'Family' or tmp == 'UniqueID' or tmp == 'Fullname' or tmp == 'Preferred Family' or tmp == 'Compatible Full':
 			sfnt_names[i][2] = replacer2(sfnt_names[i][2])
+		if tmp == 'PostScriptName':
+			sfnt_names[i][2] = replacer2(sfnt_names[i][2], dontStripSpace=False)
 		sfnt_names[i] = tuple(sfnt_names[i])
 	font.sfnt_names = tuple(sfnt_names)
 
 	if font.familyname != getNameRecordValue(font, 'Family'): # fixed for whatever linking between them Fontforge is keeping
 		font.familyname = replacer2(font.familyname)
 	if font.fontname != getNameRecordValue(font, 'PostScriptName'):
-		font.fontname = replacer2(font.fontname)
+		font.fontname = replacer2(font.fontname, dontStripSpace=False)
 	if font.fullname !=getNameRecordValue(font, 'Fullname'):
 		font.fullname = replacer2(font.fullname)
 	if font.fondname != None:
 		font.fondname = replacer2(font.fondname) # should be independent
 
-def renameFont_prefix(font, prefix, familyName=None):
+def renameFont_prefix(font, prefix, forceInsertSpace=False, familyName=None):
 	def replacer2(text):
 		return replacer(text, familyName_old, familyName_new)
 
@@ -214,7 +220,7 @@ def applyFeatureToGlyph(font, glyph, feature, forceRe=False, copyGlyph=False, ov
 				copynum = copynum + 1
 				glyph_newName = '%s.copy%d' % (glyph_re.glyphname, copynum)
 
-			# create a new glyph with that name. I'm surprised that this function is not even mentioned in the current document
+			# create a new glyph with that name
 			font.createChar(-1, glyph_newName)
 
 			# copy & paste glyph_re into glyph_newName
@@ -236,9 +242,7 @@ def applyFeatureToGlyph(font, glyph, feature, forceRe=False, copyGlyph=False, ov
 			# posSubs = glyph.getPosSub('*')
 
 			if copyBehavior == 2: # swap the unicode points of the original glyph and the copy
-				tmp = glyph_copy.unicode
-				glyph_copy.unicode = glyph_re.unicode
-				glyph_re.unicode = tmp
+				glyph_copy.unicode, glyph_re.unicode = glyph_re.unicode, glyph_copy.unicode
 
 			return 0
 
@@ -252,16 +256,14 @@ def applyFeatureToGlyph(font, glyph, feature, forceRe=False, copyGlyph=False, ov
 			font.paste()
 
 			if copyBehavior == 2: # swap the unicode points of the original glyph and the copy
-				tmp = glyph.unicode
-				glyph.unicode = glyph_re.unicode
-				glyph_re.unicode = tmp
+				glyph.unicode, glyph_re.unicode = glyph_re.unicode, glyph_re.unicode
 			return 0
 		else:
 			return 1 # can't replace. copying not allowed
 	else:
 		return 2 # feature not available for this glyph
 
-def turnonFeature(sina, enableSmallCaps=False, enableStyleAlt=False, setFigure=0, setNumber=0, forceRe=False, copyGlyph=False, overWr=False):
+def turnonFeature(sina, enableSmallCaps=False, enableStyleAlt=False, setFigure=0, setNumber=0, forceRe=False, copyGlyph=False, overWr=False, allSmallCaps=False):
 	# figure 0 = don't change, 1 = lining, 2 = old style
 	# number 0 = don't change, 1 = proportional, 2 = tabular
 
@@ -273,6 +275,9 @@ def turnonFeature(sina, enableSmallCaps=False, enableStyleAlt=False, setFigure=0
 	hasFeature_TabNum = checkFeature(sina, 'tnum')
 	hasFeature_StyleAlt = checkFeature(sina, 'salt')
 
+	if allSmallCaps and not hasFeature_C2SC:
+		print('Capital to Smallcap feature unavailable.')		
+
 	if enableSmallCaps:
 		if hasFeature_SC:
 			# total = 0
@@ -283,7 +288,7 @@ def turnonFeature(sina, enableSmallCaps=False, enableStyleAlt=False, setFigure=0
 				# if c2sc/smcp for numbers is unavailable, users can use OSF instead
 				# some fonts like ElysiumStd actually use OSF for SC
 				succ = applyFeatureToGlyph(sina, glyph, 'smcp', forceRe, copyGlyph, overWr)
-				if succ == 2 and hasFeature_C2SC and glyph.unicode >= 48 and glyph.unicode <= 57:
+				if succ == 2 and hasFeature_C2SC and ((glyph.unicode >= 48 and glyph.unicode <= 57) or allSmallCaps):
 					succ2 = applyFeatureToGlyph(sina, glyph, 'c2sc', forceRe, copyGlyph, overWr)
 				elif succ == 1:
 					# succ3 = applyFeatureToGlyph(sina, glyph, 'smcp', forceRe, copyGlyph=False, overWr=True) 
@@ -373,6 +378,8 @@ def doStuff():
 		setNumber = item[4]
 		suffix = item[5]
 		substitutingSuffixes = item[6]
+		forceInsertSpace = item[7]
+		allSmallCaps = item[8]
 
 		print('\nProcessing file: %s' % fileName)
 		if not os.path.isfile(fileName):
@@ -384,13 +391,13 @@ def doStuff():
 
 		# now handle suffix in output filename
 		familyName_old = getFamilyName(font) # must be before renameFont_suffix because it will change the font name
-		if ' ' in familyName_old:
+		if ' ' in familyName_old or forceInsertSpace:
 			familyName_new = familyName_old + ' ' + suffix
 		else:
 			familyName_new = familyName_old + suffix
 
 		outFname, ext = os.path.splitext(fname)
-		tmp = replacer(outFname, familyName_old, familyName_new)
+		tmp = replacer(outFname, familyName_old, familyName_new, forceInsertSpace)
 
 		if tmp != outFname: # replacing is successful, well probably. It's fine as long as it's different lol
 			outFname = tmp
@@ -398,16 +405,16 @@ def doStuff():
 			elements = outFname.split('-')
 			outFname = elements[0] + suffix + '-' + ''.join(elements[1:])
 		else:
-			if ' ' in outFname:
+			if ' ' in outFname or forceInsertSpace:
 				outFname = outFname + ' ' + suffix
 			else:
 				outFname = outFname + suffix
 
-		turnonFeature(font, enableSmallCaps, enableStyleAlt, setFigure, setNumber)
+		turnonFeature(font, enableSmallCaps, enableStyleAlt, setFigure, setNumber, allSmallCaps=allSmallCaps)
 		if substitutingSuffixes:
 			for subSuf in substitutingSuffixes:
 				substituteGlyphsWithSuffix(font, subSuf)
-		renameFont_suffix(font, suffix)
+		renameFont_suffix(font, suffix, forceInsertSpace)
 		fixFontMisc(font)
 
 		if not outputFmt:
@@ -427,10 +434,12 @@ def parseParams():
 	global inputList, outputDir, outputFmt
 
 	enableSmallCaps = False
+	allSmallCaps = False
 	enableStyleAlt = False
 	setFigure = 0
 	setNumber = 0
 	suffix = 'SC'
+	forceInsertSpace = False
 	substitutingSuffixes = []
 
 	i = 1
@@ -470,12 +479,16 @@ def parseParams():
 				for suf in sufes:
 					substitutingSuffixes.append(suf)
 				i += 1
+			elif arg == "sp":
+				forceInsertSpace = True
 			elif arg == "sc":
 				enableSmallCaps = True
+			elif arg == "sca":
+				allSmallCaps = True
 			elif arg == 'sa':
 				enableStyleAlt = True
 		else:
-			tmp = (arg, enableSmallCaps, enableStyleAlt, setFigure, setNumber, suffix, substitutingSuffixes)
+			tmp = (arg, enableSmallCaps, enableStyleAlt, setFigure, setNumber, suffix, substitutingSuffixes, forceInsertSpace, allSmallCaps)
 			inputList.append(tmp)
 		i += 1
 
@@ -502,12 +515,14 @@ def printReadMe():
 	print(' ')
 	print("Options:")
 	print("    -sc                   Enable Small Caps feature")
+	print("    -sca                  Also enable Small Caps feature for uppercase glyphs")
 	print("    -sa                   Enable Stylistic Alternatives feature")
 	print('    -f number             Set figures to [1] Lining, [2] Oldstyle, [0] no change')
 	print('    -n number             Set number to [1] Proportional, [2] Tabular, [0] no change')
-	print('    -sub ".sc,.oldstyle"  Substitute glyphs ending with specified suffixes with those not doing')
+	print('    -sub ".sc,.oldstyle"  Substitute glyphs with specified suffixes with those without')
 	print('    -o "output dir"       Set where to save outputs')
 	print('    -sf "suffix"          Add suffix to font name')
+	print('    -sp                   Force inserting a space between family name and suffix')
 	print('    -fmt "otf,ttf,sfd"    Set output formats via file extension')
 	print("    -i                    All following paramemters are inputs")
 	print(' ')
@@ -517,7 +532,10 @@ def printReadMe():
 	print('    Output files, if already existing, will be overwritten without prompt.')
 	print('    If not specified, output format is the same as input if it\' either otf, ttf, or sfd; otf otherwise.')
 	print('    If not specified, suffix is "SC".')
+	print('    A space is inserted between family name and suffix only when family name already has space(s) in it.')
+	print('    For examples: Arno Pro SC, SinaNovaSC. Use -sp to force inserting a space if you want.')
 	print('    Specific substitution should be used only with fonts with broken substitution tables.')
+	print('    Option -sca only has effect when -sc is on.')
 	print(' ')
 	print("Examples:")
 	print('    fontforge -script fontforge.py -fmt "otf,ttf" -f 2 -n 0 -sc -sf "SC" "SinaNova-Regular.sfd"')

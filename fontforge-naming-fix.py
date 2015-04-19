@@ -5,6 +5,9 @@
 # - figure out how to change Embeddable, Italic, Bold
 # - make fixFontName() smarter. Current (not good): StuartPro-TitlingBoldItalic -> family "Stuart Pro Titling Bold", style "Italic"
 # - support "super" family name. Ex: "Stuart Pro" for "Stuart Pro Titling", "Stuart Pro Text", "Stuart Pro Caption"
+# 
+# Note:
+# - Found the issue with Bold & Italic: the March 2015 release of FontForge is buggy. February 2015 one works just fine.
 
 import fontforge, os, sys
 
@@ -23,6 +26,9 @@ outputDir = ''
 outputFmt = []
 autoDetectAll = False
 dryRun = False
+
+# exceptions
+do_not_change_book_to_regular = True
 
 def initStuff():
 	import sys, time
@@ -71,7 +77,7 @@ def fixFontName(font, familyName, styleName):
 	if True:
 		if (styleName == 'Regular Italic'):
 			styleName = 'Italic'
-		elif (styleName == 'Book Italic'):
+		elif styleName == 'Book Italic' and not do_not_change_book_to_regular:
 			styleName = 'Italic'
 		elif (styleName == 'Normal Italic'):
 			styleName = 'Italic'
@@ -91,8 +97,12 @@ def fixFontName(font, familyName, styleName):
 	
 	# put style link group here
 	Family = familyName
-	if not (styleName == 'Italic' or styleName == 'Bold' or styleName == 'Bold Italic' or 'Regular' == styleName or 'Book' == styleName or 'Normal' == styleName or 'Roman' == styleName):
-		Family = familyName + ' ' + styleName.replace('Italic', '').replace('Regular', '').replace('Book', '').replace('Normal', '').replace('Roman', '').replace('  ', ' ').strip()
+	if not (styleName == 'Italic' or styleName == 'Bold' or styleName == 'Bold Italic' or 'Regular' == styleName or ('Book' == styleName and not do_not_change_book_to_regular) or 'Normal' == styleName or 'Roman' == styleName):
+		Family = familyName + ' ' + styleName.replace('Italic', '').replace('Regular', '')
+		if not do_not_change_book_to_regular:
+			Family = Family.replace('Book', '')
+		Family = Family.replace('Normal', '').replace('Roman', '')
+		Family = Family.replace('  ', ' ').strip()
 	ttf_Family = ('English (US)', 'Family', Family)
 	# The 'Style Name' field must have one of the four values: 'Regular', 'Italic', 'Bold', 'Bold Italic'. No other values are acceptable. 
 	SubFamily = 'Regular'
@@ -141,27 +151,51 @@ def fixFontName(font, familyName, styleName):
 	# font.appendSFNTName('English (US)', 'Compatible Full', font.fullname)
 
 def fixFontWeight(font, styleName):
-	lookupStr = ('Thin', 'UltraLight', 'Ultra Light', 'ExtraLight',  'Extra Light', 'Light', 'Regular', 'Book', 'Normal', 'Medium', 'SemiBold', 'Semi Bold', 'DemiBold', 'ExtraBold', 'Extra Bold', 'Bold', 'Heavy', 'Black', 'Ultra')
-	lookupNum = (   100,          200,           200,          200,            200,     300,       400,    400,      400,      500,        600,         600,        600,         800,          800,    700,     800,     900,    900)
+	styleName = styleName.replace('Italic', '').strip()
+
+	lookupStr = ('None', 'Hair', 'Hairline', 'Thin', 'UltraLight', 'Ultra Light', 'ExtraLight',  'Extra Light', 'Light', 'Lt', 'Regular', 'Book', 'Normal', 'Medium', 'SemiBold', 'Semi Bold', 'DemiBold', 'SmB', 'SemiB', 'ExtraBold', 'Extra Bold', 'XB', 'XtraB', 'Bold', 'Heavy', 'Black', 'Ultra')
+	lookupNum = (   400,    100,        100,    100,          200,           200,          200,            200,     300,  300,       400,    400,      400,      500,        600,         600,        600,   600,     600,         800,          800,  800,     800,    700,     800,     900,    900)
 
 	sWeight = 'Regular'
 	nWeight = 400
-	for i in range(len(lookupStr)):
-		if (lookupStr[i].lower() in styleName.lower()):
+	matched = False
+	for i in range(len(lookupStr)): # safe first
+		# print('lookupStr[i] = "%s". styleName = "%s"' % (lookupStr[i], styleName))
+		if (lookupStr[i] == styleName):
 			sWeight = lookupStr[i]
 			nWeight = lookupNum[i]
+			matched = True
 			break
+	if not matched:
+		for i in range(len(lookupStr)):
+			if (lookupStr[i].lower() in styleName.lower()):
+				sWeight = lookupStr[i]
+				nWeight = lookupNum[i]
+				break
 
 	font.os2_weight = nWeight
 	font.weight = sWeight
 
-	# print('sWeight = %s' % sWeight)
+	# print('sWeight = "%s"' % sWeight)
 	# print('nWeight = %d' % nWeight)
 
-def fixFontMisc(font):
+def fixFontMisc(font, styleName):
 	os2_version = font.os2_version
 	if os2_version < 2: # windows will reject otf cff font with os2 version 1
 		font.os2_version = 3
+
+	# macstyle is not documented at all. After a few tests, these work. 
+	# I have no idea about other things in macstyle, but atm, I only need to set Bold and Italic.
+	# OK, apparently it's not enough. It works in FontForge project but not when it generates fonts.
+	# Now I have even less idea about this than previously
+	if styleName == 'Bold Italic':
+		font.macstyle = 3
+	elif styleName == 'Bold':
+		font.macstyle = 1
+	elif 'Italic' in styleName:
+		font.macstyle = 2
+	else:
+		font.macstyle = 0
 
 def printInfo(font):
 	print('font.familyname: ' + font.familyname)
@@ -198,6 +232,8 @@ def getStyleNameFromFname2(fname, fileBaseName): # even more hacks
 			styleName = styleName.replace('Itali', 'Italic')
 		elif 'Ital' in styleName:
 			styleName = styleName.replace('Ital', 'Italic')
+		elif styleName.endswith('It'):
+			styleName = styleName[:-2] + ' Italic'
 	if 'Medium' not in styleName:
 		if 'Med' in styleName:
 			styleName = styleName.replace('Med', 'Medium')
@@ -213,8 +249,14 @@ def getStyleNameFromFname2(fname, fileBaseName): # even more hacks
 		styleName = styleName.replace('Semi Bold', 'SemiBold')
 	if 'DemiBold' in fname:
 		styleName = styleName.replace('Demi Bold', 'DemiBold')
+	if 'SmB' in fname:
+		styleName = styleName.replace('Sm B', 'SmB')
+	if 'XtraB' in fname:
+		styleName = styleName.replace('Xtra B', 'XtraB')
 	if 'OSF' in fname:
 		styleName = styleName.replace('O S F', 'OSF')
+	if 'OsF' in fname:
+		styleName = styleName.replace('Os F', 'OsF')
 
 	styleName = styleName.replace('  ', ' ').strip()
 
@@ -387,7 +429,7 @@ def doStuff2():
 
 		if not familyName:
 			if fileBaseName:
-				print('It reached here')
+				# print('It reached here')
 				familyName = fileBaseName
 			else: # auto-detect
 				bareName = os.path.splitext(fname)[0]
@@ -395,13 +437,13 @@ def doStuff2():
 				familyName = fileBaseName
 
 		styleName = getStyleNameFromFname2(fname, fileBaseName)
-		print('familyName = %s' % familyName)
-		print('styleName = %s' % styleName)
+		print('familyName = "%s"' % familyName)
+		print('styleName = "%s"' % styleName)
 
 		font = fontforge.open(fileName)
 		fixFontName(font, familyName, styleName)
 		fixFontWeight(font, styleName)
-		fixFontMisc(font)
+		fixFontMisc(font, styleName)
 
 		if not outputFmt:
 			ext = os.path.splitext(fname)[1]
