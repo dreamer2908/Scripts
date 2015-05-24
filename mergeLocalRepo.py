@@ -2,12 +2,15 @@
 # encoding: utf-8
 
 # A random script written by dreamer2908 to do something not even remotely useful to you
-# TODO: re-write into a full-feature local repo maker
+# Now re-writing it into a full-feature local repo maker to eliminate the need of mergeTmp; this script alone should be enough
+# TODO: 
 # - DB stores package info, including output of `dpkg-deb --info x.deb`, size, md5, sha1, sha256 checksums [done]
 # - Write Packages automatically. gz is optional [done]
-# - Clean up old versions (to Dump) automatically
-# - Maybe intergrate local_package_update functions
-# TL;DR: eliminate the nedd of mergeTmp; this script alone should be enough
+# - Clean up old versions automatically [done]. 
+# - Option to move old versions to dump instead of deleting right away [done]
+# - Don't retain identical files [medium]
+# - Display more info about the local repo like file count in each dir. And fix pkgCount [low]
+# - Maybe intergrate local_package_update functions [optional, low]
 
 import os, sys, time, subprocess
 
@@ -19,11 +22,13 @@ target2 = '/media/yumi/zZzZzZ/backup/LinuxMint/apt/archives2'
 
 inputList = ["/var/cache/apt/archives/"]
 exploreInputRecursive = False
+dontDeleteOldPkg = True
 
 dbFile = '/media/yumi/zZzZzZ/backup/LinuxMint/apt/pkgInfo.csv'
 hashDB = dict() 
 hashDict = dict()
 hashDictDup = dict()
+pkgCount = 0
 
 defaultTimer = None
 terminalSupportUnicode = False
@@ -122,6 +127,7 @@ def copyFile(sourceFile, failbackFilename=None):
 			debInfo = getDebInfo(sourceFile)
 			hashDict[sha256] = (targetFile, crc32, md5, sha1, fileSize, debInfo)
 			print('%s copied.' % srcName)
+			# print('[copyFile] copied to %s' % targetFile)
 			return True
 
 	return False
@@ -231,7 +237,7 @@ def getInfoFromPkg(debInfo, infoType):
 		if i.startswith(infoType):
 			return i.split(' ')[1]
 
-def sortPkg():
+def cleanPkg():
 	# put amd64 and all packages in archives1, i386 ones in archives2, old and repeat ones in dump
 	# after this, temp should either be empty or contain one random package
 	# hashDictDup should be empty (OK, it's fine even if it's not empty), and hashDict contains only latest versions
@@ -242,11 +248,14 @@ def sortPkg():
 	apt_pkg.init()
 
 	def comparePkg(pkgName, pkgInfo):
+		# 1 is the deb we're processing, 2 is the existing one
+
 		if pkgName in pkgDict:
 			# check arch, version, location, etc.
 			arch1 = getInfoFromPkg(pkgInfo[6], 'Architecture:')
 			arch2 = getInfoFromPkg(pkgDict[pkgName][6], 'Architecture:')
 			if arch1 != arch2:
+				pkgInfo = sortPkg(pkgInfo)
 				pkgDictMore.append(pkgInfo)
 				return
 
@@ -261,53 +270,127 @@ def sortPkg():
 			elif apt_pkg.version_compare(v1, v2) == 0:
 				if (path2.endswith('tmp') or path2.endswith('dump')) and (path1.endswith('archives1') or path1.endswith('archives2')):
 					replaceIt = True
+					
 			if replaceIt:
-				# TODO: dump 2
+				# either move [2] to dump or delete it
 				src = pkgDict[pkgName][0]
 				dst = dumpDir
-				try:
-					os.unlink(src)
-				# 	shutil.move(src, dst)
-				# 	pkgDict[pkgName][0] = os.path.join(dst, os.path.split(src)[1])
-				# 	# print('Dumping 2: moving %s...' % (src))
-				# 	# print('v1 = %s, v2 = %s, path1 = %s, path2 = %s' % (v1, v2, path1, path2))
-				except:
-				# 	pkgDict[pkgName][0] = src
-					pass
-				# pkgDictDup.append(pkgDict[pkgName])
+				if dontDeleteOldPkg:
+					newPath = os.path.join(dst, os.path.split(src)[1])
+					plsMove = True
+					deleteExisting = False
+					if os.path.isfile(newPath):
+						if os.path.abspath(newPath) != os.path.abspath(src):
+							deleteExisting = True
+						else:
+							plsMove = False
+					try:
+						if deleteExisting:
+							os.unlink(newPath)
+						if plsMove:
+							shutil.move(src, dst)
+					except Exception as e:
+						print("[comparePkg] Error: Can't move [2] to dump %s" % src)
+						print(e.strerror)
+					else:
+						pkgDict[pkgName][0] = newPath
+					pkgDictMore.append(pkgDict[pkgName])
+				else:
+					try:
+						os.unlink(src)
+					except Exception as e:
+						print("[comparePkg] Error: Can't delete [2] %s" % src)
+						print(e.strerror)
 
+				# move 1 into archive1/2 if needed
 				if (path1.endswith('tmp') or path1.endswith('dump')):
-					src = pkgDict[pkgName][0]
+					src = pkgInfo[0]
 					if arch1 == 'all' or arch1 == 'amd64':
 						dst = target1
 					else:
 						dst = target2
-				try:
-					shutil.move(src, dst)
-					pkgInfo[0] = os.path.join(dst, os.path.split(src)[1])
-				except:
-					pkgInfo[0] = src
+
+					newPath = os.path.join(dst, os.path.split(src)[1])
+					plsMove = True
+					deleteExisting = False
+					if os.path.isfile(newPath):
+						if os.path.abspath(newPath) != os.path.abspath(src):
+							deleteExisting = True
+						else:
+							plsMove = False
+					try:
+						if deleteExisting:
+							os.unlink(newPath)
+						if plsMove:
+							shutil.move(src, dst)
+					except Exception as e:
+						pkgInfo[0] = src
+						print("[comparePkg] Error: Can't move [1] %s into %s" % (src, dst))
+						print(e.strerror)
+					else:					
+						pkgInfo[0] = os.path.join(dst, os.path.split(src)[1])
+
 				pkgDict[pkgName] = pkgInfo
+
 			else:
-				# TODO: dump 1
+				# either move [1] to dump or delete it
 				src = pkgInfo[0]
 				dst = dumpDir
-				try:
-					os.unlink(src)
-				# 	shutil.move(src, dst)
-				# 	pkgInfo[0] = os.path.join(dst, os.path.split(src)[1])
-				# 	# print('Dumping 1: moving %s...' % (src))
-				# 	# print('v1 = %s, v2 = %s, path1 = %s, path2 = %s' % (v1, v2, path1, path2))
-				except:
-				# 	pkgInfo[0] = src
-					pass
-				# pkgDictDup.append(pkgInfo)
+
+				if dontDeleteOldPkg:
+					newPath = os.path.join(dst, os.path.split(src)[1])
+					plsMove = True
+					deleteExisting = False
+					if os.path.isfile(newPath):
+						if os.path.abspath(newPath) != os.path.abspath(src):
+							deleteExisting = True
+						else:
+							plsMove = False
+					try:
+						if deleteExisting:
+							os.unlink(newPath)
+						if plsMove:
+							shutil.move(src, dst)
+					except Exception as e:
+						print("[comparePkg] Error: Can't move [1] to dump %s" % src)
+						print(e.strerror)
+					else:
+						pkgInfo[0] = newPath
+					pkgDictMore.append(pkgInfo)
+				else:
+					try:
+						os.unlink(src)
+					except Exception as e:
+						print("[comparePkg] Error: Can't delete [1] %s" % src)
+						print(e.strerror)
 		else:
 			pkgDict[pkgName] = pkgInfo
 
+	def sortPkg(pkgInfo):
+		# check arch, location, etc.
+		arch1 = getInfoFromPkg(pkgInfo[6], 'Architecture:')
+		path1 = os.path.split(pkgInfo[0])[0]
+
+		if (path1.endswith('tmp')):
+			src = pkgDict[pkgName][0]
+			if arch1 == 'all' or arch1 == 'amd64':
+				dst = target1
+			else:
+				dst = target2
+
+			try:
+				shutil.move(src, dst)
+			except Exception as e:
+				pkgInfo[0] = src
+				print("[sortPkg] Error: Can't move %s into %s" % (src, dst))
+				print(e.strerror)
+			else:
+				pkgInfo[0] = os.path.join(dst, os.path.split(src)[1])				
+
+		return pkgInfo
+
 	pkgDict = dict()
 	pkgDictMore = []
-	pkgDictDup = []
 
 	for sha256 in hashDict:
 		fname, crc32, md5, sha1, size, debInfo = hashDict[sha256]
@@ -320,6 +403,11 @@ def sortPkg():
 		pkgName = debInfo.split('\n')[0].split(' ')[1]
 		pkgInfo = [fname, crc32, md5, sha1, sha256, size, debInfo]
 		comparePkg(pkgName, pkgInfo)
+
+	# move deb # ones in pkgDictMore should be already moved
+	for pkgName in pkgDict:
+		pkgInfo = pkgDict[pkgName]
+		pkgDict[pkgName] = sortPkg(pkgInfo)
 
 	# write hashDict
 	hashDict = dict()
@@ -370,7 +458,10 @@ def writePackages():
 			outPkgs[dname] = []
 
 	# write Packages
+	global pkgCount
+	pkgCount = 0
 	for dname in outPkgs:
+		pkgCount += len(outPkgs[dname])
 		outFname = os.path.join(dname, 'Packages')
 		writer = open(outFname, 'w', newline='\n')
 		for pkgInfo in outPkgs[dname]:
@@ -400,16 +491,17 @@ def doStuff():
 		else:
 			for (dirpath, dirnames, filenames) in os.walk(path):
 				for fname in filenames:
-					fullName = os.path.join(dirpath, fname)
-					if copyFile(fullName, None):
-						fileCopied += 1
-						copiedSize += os.path.getsize(fullName)
-					fileProcessed += 1
+					if fname.endswith('.deb'):
+						fullName = os.path.join(dirpath, fname)
+						if copyFile(fullName, None):
+							fileCopied += 1
+							copiedSize += os.path.getsize(fullName)
+						fileProcessed += 1
 				if not exploreInputRecursive: 
 					break
 
 	print('\nCleaning up packages...')
-	sortPkg()
+	cleanPkg()
 
 	print('\nSaving database...')
 	saveHashDB()
@@ -427,6 +519,7 @@ def doStuff():
 
 	print('\n%d file(s) scanned. %d new file(s), %s copied to output dir.' % (fileProcessed, fileCopied, byteToHumanSize(copiedSize)))
 	print('Output dir now contains %d deb file(s).' % outDirFileCount)
+	# print('Databse now contains %d entries.' % pkgCount)
 	print('\nAll done.')
 
 def initStuff():
