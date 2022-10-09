@@ -107,7 +107,7 @@ def processFile(imagePath, silent):
 
 		if im_new_width < im_width:
 			try: # the best-quality resampler PIL supports is LANCZOS. It was named ANTIALIAS in old version
-				resampler = Image.LANCZOS
+				resampler = Image.Resampling.LANCZOS
 			except:
 				resampler = Image.ANTIALIAS
 			im = im.resize((im_new_width, im_new_height), resampler)
@@ -220,7 +220,10 @@ def executeTask(params, taskName = ''):
 		returnCode = e.returncode
 		error = True
 	if sys.stdout.encoding != None: # It's None when debugging in Sublime Text
-		execOutput = execOutput.decode(sys.stdout.encoding)
+		try:
+			execOutput = execOutput.decode(sys.stdout.encoding)
+		except:
+			pass
 
 	return execOutput, returnCode, error
 
