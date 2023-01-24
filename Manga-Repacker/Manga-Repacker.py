@@ -8,6 +8,10 @@ from io import BytesIO
 plugin_name = 'Manga-Repacker'
 appFolder = os.path.dirname(os.path.abspath(__file__))
 
+sevenzipPath = os.path.join(appFolder, '7z.exe')
+if sys.platform != 'win32':
+	sevenzipPath = '7z'
+
 os.chdir(appFolder)
 
 def processFolder(folderPath):
@@ -24,11 +28,11 @@ def processFolder(folderPath):
 	for (dirpath, dirnames, filenames) in os.walk(folderPath):
 		for fname in sorted(filenames):
 			print(fname)
-			# Only continue if it's BMP, PNG, and JPEG
+			# Only continue if it's a known static image
 			# Well, at least don't touch GIF (may have animation) or whatever uncommon formats
 			dummy, ext = os.path.splitext(fname)
-			if ext.upper() not in ['.BMP', '.PNG', '.JPEG', '.JPG']:
-				print('Not BMP, PNG, or JPEG. Skipped.')
+			if ext.upper() not in ['.BMP', '.PNG', '.JPEG', '.JPG', '.WEBP']:
+				print('Not BMP, PNG, JPEG, or WEBP. Skipped.')
 				continue
 
 			imagePath = os.path.join(dirpath, fname)
@@ -37,7 +41,7 @@ def processFolder(folderPath):
 			input_total_size += oldSize
 			total_image_count += 1
 
-			changed, downscaled, newSize = processFile(imagePath, True)
+			changed, downscaled, newSize = processFile(imagePath)
 
 			if changed:
 				compressed_image_count += 1
@@ -55,8 +59,7 @@ def processFolder(folderPath):
 
 # input: path to image file
 # output: (changed?, downscaled?, newSize)
-def processFile(imagePath, silent):
-	skip_png_compression_for_png_inputs = True
+def processFile(imagePath, silent=True):
 	downscale_image_larger_than_xxx = True
 	large_image_px = 1600 # image is considered large if any of its dimensions is larger than this
 	downscale_to_px = 1600
@@ -84,14 +87,14 @@ def processFile(imagePath, silent):
 		print('Input size: %d (bytes)' % original_size)
 		print('Input format: %s' % im.format)
 		print('Input dimensions: %dx%dpx' % (im.size))
-	
+
 	# Only continue if it's BMP, PNG, and JPEG
 	# Well, at least don't touch GIF (may have animation) or whatever uncommon formats
-	if original_format not in ['BMP', 'PNG', 'JPEG']:
+	if original_format not in ['BMP', 'PNG', 'JPEG', 'WEBP']:
 		if not silent:
-			print('Not BMP, PNG, or JPEG. Skipped.')
+			print('Not BMP, PNG, JPEG, or WEBP. Skipped.')
 		return (changed, downscaled, newSize)
-			
+
 	downscaled = False
 	if downscale_image_larger_than_xxx:
 		im_width, im_height = im.size
@@ -107,7 +110,7 @@ def processFile(imagePath, silent):
 
 		if im_new_width < im_width:
 			try: # the best-quality resampler PIL supports is LANCZOS. It was named ANTIALIAS in old version
-				resampler = Image.Resampling.LANCZOS
+				resampler = Image.LANCZOS
 			except:
 				resampler = Image.ANTIALIAS
 			im = im.resize((im_new_width, im_new_height), resampler)
@@ -116,54 +119,61 @@ def processFile(imagePath, silent):
 			downscaled = True
 			# print(im.size)
 
-	# Try a few encoding to get the smallest size.
+	# Test a few encodings to get the smallest size.
 	# - PNG - best for texts and sharp patterns (smaller than jpg and lossless quality). Quite big for common photos.
 	# - JPG - good quality/size ratio for photos. Bad for texts. We go with 90% quality.
+	# - WEBP - new format, can be 25-35% smaller than JPG at the same quality
 	# Progressive JPGs are almost always smaller than baseline (normal) JPGs
 	# The different is not large, but there's no drawback except negligible performance loss
 	# Only use lossy compression if it saves more than 10%
 	# Note that mode P can't be saved to jpg directly, convert it to RGB first
 	imgOut1 = BytesIO()
-	im.convert("RGB").save(imgOut1, 'JPEG', quality=90, optimize=True, progressive=True)
-	jpg_out_size = len(imgOut1.getvalue())
+	# JPEG output
+	# im.convert("RGB").save(imgOut1, 'JPEG', quality=90, optimize=True, progressive=True)
+	# WEBP output internally converts mode P to RGB (but faster), so no need to convert first
+	im.save(imgOut1, 'WEBP', quality=90, method=5)
+	lossy_out_size = len(imgOut1.getvalue())
+	lossy_out_format = 'WEBP'
 	if not silent:
-		print('Output JPEG size: %d' % jpg_out_size)
+		print('Output lossy size: %d' % lossy_out_size)
 
-	output_format = '' # empty = do nothing
-	output_binary = ''
+	output_format = ''
+	output_binary = BytesIO()
+	output_size = original_size
 	if (original_format in ['PNG', 'BMP']): # lossless source
 		# to save time, only do lossless compression if the source is lossless
-		# to speed up even more, skip png compression for png inputs, as it usually doesn't help
-		if downscaled or original_format != 'PNG' or (original_format == 'PNG' and not skip_png_compression_for_png_inputs):
-			imgOut2 = BytesIO()
-			im.save(imgOut2, 'PNG', optimize=True)
-			png_out_size = len(imgOut2.getvalue())
-			if not silent:
-				print('Output PNG size: %d' % png_out_size)
-			# go with jpg if it saves at least 10%, and significantly more than png does
-			if (jpg_out_size <= 0.9*original_size) and (jpg_out_size <= 0.9*png_out_size):
-				output_format = 'JPEG'
-				output_binary = imgOut1.getvalue()
-			# otherwise, go with png if it saves something
-			elif (png_out_size < original_size):
-				output_format = 'PNG'
-				output_binary = imgOut2.getvalue()
-		else:
-			# go with jpg if it saves at least 10%
-			if (jpg_out_size <= 0.9*original_size):
-				output_format = 'JPEG'
-				output_binary = imgOut1.getvalue()
+		imgOut2 = BytesIO()
+		# im.save(imgOut2, 'PNG', optimize=True)
+		# switch to lossless webp because it saves much more space
+		im.save(imgOut2, 'WEBP', lossless=True)
+		lossless_out_size = len(imgOut2.getvalue())
+		lossless_out_format = 'WEBP'
+		if not silent:
+			print('Output lossless size: %d' % lossless_out_size)
+
+		# go with lossy if it saves at least 10%, and significantly more than lossless does
+		if (lossy_out_size <= 0.9*original_size) and (lossy_out_size <= 0.9*lossless_out_size):
+			output_format = lossy_out_format
+			output_binary = imgOut1
+			newSize = lossy_out_size
+
+		# otherwise, go with png if it saves something
+		elif (lossless_out_size < original_size):
+			output_format = lossless_out_format
+			output_binary = imgOut2
+			newSize = lossless_out_size
+
 	else: # source is lossy
-			# go with jpg if it saves at least 10%
-			if (jpg_out_size <= 0.9*original_size):
-				output_format = 'JPEG'
-				output_binary = imgOut1.getvalue()
+		# go with lossy if it saves at least 10%
+		if (lossy_out_size <= 0.9*original_size):
+			output_format = lossy_out_format
+			output_binary = imgOut1
+			newSize = lossy_out_size
 
 	im.close();
 
-	if output_format:
+	if output_format: # only save output if a format is selected above
 		changed = True
-		newSize = len(output_binary)
 
 		space_saved = (original_size) - newSize
 		if not silent:
@@ -176,16 +186,14 @@ def processFile(imagePath, silent):
 
 		# write output, delete the original file
 		os.remove(imagePath)
-		
+
 		bareName, ext = os.path.splitext(imagePath)
-		new_ext = '.jpg'
-		if output_format == 'PNG':
-			new_ext = '.png'
+		new_ext = '.' + output_format.lower()
 		outputName = bareName + new_ext
 
 		# Write the stuff
 		with open(outputName, "wb") as f:
-			f.write(imgOut1.getbuffer())
+			f.write(output_binary.getbuffer())
 	else:
 		if not silent:
 			print('No significant space saves. No change.')
@@ -229,7 +237,6 @@ def executeTask(params, taskName = ''):
 
 
 def packToArchive(filenames, archive):
-	sevenzipPath = os.path.join(appFolder, '7z.exe')
 	zparams = [sevenzipPath, 'a', '-aoa', '-tzip']
 	zoutput = archive
 
@@ -250,7 +257,6 @@ def packToArchive(filenames, archive):
 
 
 def extractArchive(filePath, outputFolder):
-	sevenzipPath = os.path.join(appFolder, '7z.exe')
 	zparams = [sevenzipPath, 'x', filePath, "-o%s" % outputFolder, '-aoa']
 	# print(zparams)
 
@@ -284,10 +290,25 @@ def doStuff(inFile):
 	# return
 
 	# inFile = "E:\\Downloads\\Machimaho - I Messed Up and Made the Wrong Person Into a Magical Girl! (Digital) (danke-Empire)\\Machimaho - I Messed Up and Made the Wrong Person Into a Magical Girl! v01 (2018) (Digital) (danke-Empire).cbz"
-	outFile = os.path.splitext(inFile)[0] + ' (repacked).cbz'
+
+	isFile = os.path.isfile(inFile)
+	suffix = ' (repacked).cbz'
+
+	# if inFile is a folder, copy it instead of extracting
+
+	if isFile:
+		outFile = os.path.splitext(inFile)[0] + suffix
+	else:
+		outFile = inFile + suffix
 
 	tmpDir = str(uuid.uuid4())
-	extractArchive(inFile, tmpDir)
+
+	if isFile:
+		extractArchive(inFile, tmpDir)
+	else:
+		print('Copying input folder "%s" to "%s"' % (inFile, tmpDir))
+		shutil.copytree(inFile, tmpDir)
+
 	processFolder(tmpDir)
 	packToArchive([os.path.join(tmpDir, '*')], outFile)
 	print("Removing temp dir...")
